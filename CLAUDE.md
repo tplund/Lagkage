@@ -1,12 +1,19 @@
 # Lagkage – Tomas' billededitor
 
-En lille Windows-billededitor (Python + PySide6), der erstatter Photoshop til Tomas' daglige brug: lag, markeringer, flyt, udfyld, pipette og lidt mere. Han kender Photoshop udenad, så **genveje og opførsel skal være som i Photoshop**. Det er hovedreglen for alt, der bygges her.
+En lille Windows-billededitor (Python + PySide6), der erstatter Photoshop til Tomas' daglige brug: lag, markeringer, flyt, udfyld, pipette og lidt mere.
+
+**Tomas' krav** (hans egne ord, så hold dig til dem):
+1. **Photoshop-genveje:** de samme taster gør det samme som i Photoshop.
+2. **Photoshop-ikoner:** værktøjslinjen skal ligne Photoshops, så han kan genkende værktøjerne. Tegn ikonerne selv i samme stil; brug ikke Adobes egne ikonfiler.
+3. **De basale ting:** lag, markeringer (markise, lasso, tryllestav), flyt, udfyld med genveje, pipette og flet lag.
+
+Sproget er **ikke** et krav. Engelsk brugerflade er fint, og helst skal man kunne skifte mellem engelsk og dansk. I dag er teksterne kun på dansk.
 
 Brugere: Tomas og Anne-Mette (hans kollega). Anne-Mette har den installerede udgave og får opdateringer automatisk.
 
 ## Sådan arbejder du her
 
-- **Brugerfladen er på dansk.** Menuerne følger Photoshops struktur (Filer, Rediger, Billede, Lag, Marker, Vis, Hjælp).
+- **Menuerne følger Photoshops struktur** (File, Edit, Image, Layer, Select, View, Help). Teksterne er i dag hårdkodet på dansk direkte i koden.
 - **Byg ikke en fuld Photoshop.** Tilføj det, Tomas faktisk bruger eller beder om. Spørg, hvis en funktion trækker i en anden retning.
 - **Test før du siger, at noget virker:** `.venv\Scripts\python.exe tests\run_all.py` (51 tjek; nogle bruger Windows' baggrundsbilleder i `C:\Windows\Web\Wallpaper`). Tilføj tjek i `tests/`, når du bygger noget nyt.
 - **Brug altid `.venv` (Python 3.13).** Systemets Python 3.10.0 kan ikke køre PyInstaller.
@@ -37,6 +44,8 @@ Gengivelsen sker i skærmopløsning (`Document.render` med en transform), så st
 
 ## Kendte begrænsninger og mulige næste skridt
 
+- **Sprogvalg (ønsket af Tomas):** engelsk brugerflade med mulighed for at skifte til dansk. Det kræver, at alle tekster samles ét sted (fx en `tr()`-funktion med en engelsk og en dansk tabel) og et valg under Hjælp/Indstillinger, der huskes i QSettings. Engelske tekster skal bruge Photoshops egne navne (Marquee, Lasso, Magic Wand, Levels, Curves, Hue/Saturation …).
+- **Ikonerne:** de nuværende er enkle egne SVG'er i `icons.py`. De kan gøres mere Photoshop-agtige.
 - Intet tekstværktøj, ingen laggrupper, ingen klippemasker (Alt+Ctrl+G)
 - PSD: justeringslag kan ikke skrives redigerbart (de bages ind ved gem som PSD). `.lagkage` beholder alt.
 - Indholdsbevidst udfyld arbejder i 512 px, så store huller bliver bløde
