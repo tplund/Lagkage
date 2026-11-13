@@ -3,7 +3,9 @@
 ; Kræver at dist\Lagkage er bygget med PyInstaller først (se README).
 
 #define MyAppName "Lagkage"
-#define MyAppVersion "1.0"
+#ifndef MyAppVersion
+  #define MyAppVersion "1.1"
+#endif
 #define MyAppExe "Lagkage.exe"
 
 [Setup]
@@ -59,3 +61,5 @@ Root: HKA; Subkey: "Software\Classes\.psd"; ValueType: string; ValueName: ""; Va
 
 [Run]
 Filename: "{app}\{#MyAppExe}"; Description: "Start Lagkage nu"; Flags: nowait postinstall skipifsilent
+; ved automatisk opdatering (stille installation) startes programmet igen af sig selv
+Filename: "{app}\{#MyAppExe}"; Flags: nowait; Check: WizardSilent

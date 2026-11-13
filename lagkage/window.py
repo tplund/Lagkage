@@ -50,6 +50,8 @@ class MainWindow(QMainWindow):
         cl.setSpacing(0)
         self.options = OptionsBar(self)
         cl.addWidget(self.options)
+        self.update_bar = self._make_update_bar()
+        cl.addWidget(self.update_bar)
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
@@ -81,11 +83,88 @@ class MainWindow(QMainWindow):
         self.set_tool('move')
         self._update_empty()
         QTimer.singleShot(2000, self._preload_inpaint)
+        from .updater import UpdateChecker, is_installed
+        self.updater = UpdateChecker(self)
+        self.updater.found.connect(self._on_update_found)
+        self.updater.none.connect(lambda msg: QMessageBox.information(self, APP, msg))
+        if is_installed():
+            QTimer.singleShot(4000, lambda: self.updater.check(quiet=True))
         geo = self.settings.value('geometry')
         if geo:
             self.restoreGeometry(geo)
         else:
             self.resize(1400, 900)
+
+    # ================= opdatering =================
+    def _make_update_bar(self):
+        from PySide6.QtWidgets import QPushButton
+        bar = QWidget()
+        bar.setObjectName('updatebar')
+        bar.setStyleSheet('#updatebar { background:#1f4f8f; } #updatebar QLabel { color:white; }')
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(12, 4, 12, 4)
+        self.update_label = QLabel()
+        lay.addWidget(self.update_label, 1)
+        now = QPushButton('Opdatér nu')
+        later = QPushButton('Senere')
+        now.clicked.connect(lambda: self.do_update(self._update_info))
+        later.clicked.connect(bar.hide)
+        lay.addWidget(now)
+        lay.addWidget(later)
+        bar.hide()
+        self._update_info = None
+        return bar
+
+    def _on_update_found(self, info):
+        from . import __version__
+        self._update_info = info
+        self.update_label.setText(f"Lagkage {info['version']} er klar (du har {__version__}). "
+                                  "Opdateringen tager et øjeblik, og programmet starter selv igen.")
+        self.update_bar.show()
+
+    def check_updates(self):
+        from .updater import is_installed
+        if not is_installed():
+            QMessageBox.information(self, APP, 'Dette er udviklingsudgaven af Lagkage, som opdateres direkte fra '
+                                    'koden. Den installerede udgave tjekker selv for opdateringer.')
+            return
+        self.updater.check(quiet=False)
+
+    def do_update(self, info):
+        from PySide6.QtWidgets import QProgressDialog
+        from . import updater
+        if not info:
+            return
+        # luk dokumenterne først (spørger om at gemme)
+        while self.tabs.count():
+            if self.close_tab(self.tabs.count() - 1) is False:
+                return
+        dlg = QProgressDialog(f"Henter Lagkage {info['version']} …", 'Annullér', 0, 100, self)
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.show()
+
+        def prog(done, total):
+            dlg.setValue(int(done * 100 / total) if total else 0)
+            QApplication.processEvents()
+            return not dlg.wasCanceled()
+        try:
+            path = updater.download(info, prog)
+        except Exception as e:
+            dlg.close()
+            QMessageBox.warning(self, APP, 'Opdateringen kunne ikke hentes: ' + str(e))
+            return
+        dlg.close()
+        if not path:
+            return
+        updater.run_installer(path)
+        self.settings.setValue('geometry', self.saveGeometry())
+        QApplication.quit()
+
+    def show_about(self):
+        from . import __version__
+        QMessageBox.about(self, 'Om Lagkage', f'<b>Lagkage {__version__}</b><br>'
+                          'En lille billededitor med Photoshops genveje.<br><br>'
+                          '<a href="https://github.com/tplund/Lagkage">github.com/tplund/Lagkage</a>')
 
     def _preload_inpaint(self):
         try:
@@ -357,6 +436,9 @@ class MainWindow(QMainWindow):
 
         m = mb.addMenu('&Hjælp')
         self._act(m, 'Tastaturgenveje', self.show_help, 'F1')
+        m.addSeparator()
+        self._act(m, 'Søg efter opdateringer…', self.check_updates)
+        self._act(m, 'Om Lagkage', self.show_about)
 
         # værktøjsgenveje (uden menu)
         for key, name in (('V', 'move'), ('I', 'eyedropper'), ('B', 'brush'), ('E', 'eraser'),
