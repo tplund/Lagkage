@@ -198,10 +198,29 @@ class Canvas(QWidget):
         p.drawEllipse(c, 3, 3)
 
     # ---------- hjælpere ----------
-    def effective_tool(self):
+    def effective_tool(self, mods=None):
         if self.space:
-            return 'hand'
+            # Photoshop: mellemrum = hånd, Ctrl+mellemrum = zoom ind, Ctrl+Alt+mellemrum = zoom ud
+            m = self._mods() if mods is None else mods
+            return 'zoom' if m & Qt.ControlModifier else 'hand'
         return self.win.tool
+
+    def _zoom_cursor(self, out=False):
+        from PySide6.QtGui import QPixmap, QPainter as _P, QPen as _Pen
+        pm = QPixmap(26, 26)
+        pm.fill(Qt.transparent)
+        p = _P(pm)
+        p.setRenderHint(_P.Antialiasing)
+        for col, w in ((QColor(0, 0, 0), 4), (QColor(255, 255, 255), 2)):
+            p.setPen(_Pen(col, w))
+            p.setBrush(Qt.NoBrush)
+            p.drawEllipse(2, 2, 15, 15)
+            p.drawLine(15, 15, 23, 23)
+            p.drawLine(6, 10, 13, 10)
+            if not out:
+                p.drawLine(10, 6, 10, 13)
+        p.end()
+        return QCursor(pm, 10, 10)
 
     def _mods(self):
         from PySide6.QtWidgets import QApplication
@@ -211,6 +230,8 @@ class Canvas(QWidget):
         t = self.effective_tool()
         if self.drag and self.drag['kind'] == 'pan':
             self.setCursor(Qt.ClosedHandCursor)
+        elif t == 'zoom':
+            self.setCursor(self._zoom_cursor(bool(self._mods() & Qt.AltModifier)))
         elif t == 'hand':
             self.setCursor(Qt.OpenHandCursor)
         elif t in ('brush', 'eraser'):
@@ -278,19 +299,21 @@ class Canvas(QWidget):
         self.mouse = sp
         mods = e.modifiers()
         doc = self.doc
-        if e.button() == Qt.MiddleButton or (e.button() == Qt.LeftButton and self.effective_tool() == 'hand'):
+        if e.button() == Qt.MiddleButton or (e.button() == Qt.LeftButton and self.effective_tool(mods) == 'hand'):
             self.drag = dict(kind='pan', start=sp, off=QPointF(self.offset))
             self.update_cursor()
             return
         if e.button() != Qt.LeftButton:
             return
+        tool = self.effective_tool(mods)
+        if tool == 'zoom':
+            # klik zoomer et trin; træk til højre/venstre zoomer glidende ind/ud (som Photoshops scrubby zoom)
+            self.drag = dict(kind='zoomdrag', start=sp, z0=self.zoom, moved=False,
+                             out=bool(mods & Qt.AltModifier))
+            return
         if self.transforming and doc.floating is not None:
             kind, idx = self._transform_hit(sp)
             self.drag = dict(kind='t_' + kind, idx=idx, start=pos, T0=QTransform(doc.floating.transform))
-            return
-        tool = self.effective_tool()
-        if tool == 'zoom':
-            self.zoom_step(-1 if mods & Qt.AltModifier else 1, sp)
             return
         if mods & Qt.ControlModifier and tool not in ('hand', 'zoom') and not self.poly:
             tool = 'move'
@@ -470,6 +493,12 @@ class Canvas(QWidget):
         if k == 'pan':
             self.offset = d['off'] + (sp - d['start'])
             self.update()
+        elif k == 'zoomdrag':
+            dx = sp.x() - d['start'].x()
+            if abs(dx) > 3:
+                d['moved'] = True
+            if d['moved']:
+                self.zoom_at(d['z0'] * (1.012 ** dx), d['start'])
         elif k in ('float', 'layer', 'movesel'):
             dx, dy = pos.x() - d['start'].x(), pos.y() - d['start'].y()
             if e.modifiers() & Qt.ShiftModifier:
@@ -559,6 +588,11 @@ class Canvas(QWidget):
         doc = self.doc
         pos = self.to_doc(e.position())
         k = d['kind']
+        if k == 'zoomdrag':
+            if not d['moved']:
+                self.zoom_step(-1 if (d['out'] or e.modifiers() & Qt.AltModifier) else 1, d['start'])
+            self.update_cursor()
+            return
         if k in ('float', 'layer'):
             if not d['moved'] and not d['alt']:
                 doc.cancel_begin()
@@ -614,10 +648,13 @@ class Canvas(QWidget):
     # ---------- tastatur ----------
     def keyPressEvent(self, e):
         k = e.key()
-        if k == Qt.Key_Space and not e.isAutoRepeat():
-            self.space = True
-            self.update_cursor()
+        if k == Qt.Key_Space:
+            if not e.isAutoRepeat():
+                self.space = True
+                self.update_cursor()
             return
+        if k in (Qt.Key_Control, Qt.Key_Alt):
+            self.update_cursor()
         if k in (Qt.Key_Return, Qt.Key_Enter):
             if self.transforming:
                 self.end_transform(True)
