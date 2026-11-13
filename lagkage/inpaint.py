@@ -20,12 +20,12 @@ def model_ready():
     return os.path.exists(p) and os.path.getsize(p) > 100_000_000
 
 
-def download_model(progress=None):
-    """Hent modellen (ca. 200 MB). progress(hentet, total) -> False afbryder."""
-    p = model_path()
+def download_model(progress=None, url=MODEL_URL, path=None):
+    """Hent en model (ca. 200 MB). progress(hentet, total) -> False afbryder."""
+    p = path or model_path()
     os.makedirs(os.path.dirname(p), exist_ok=True)
     tmp = p + '.part'
-    with urllib.request.urlopen(MODEL_URL, timeout=60) as r, open(tmp, 'wb') as f:
+    with urllib.request.urlopen(url, timeout=60) as r, open(tmp, 'wb') as f:
         total = int(r.headers.get('Content-Length') or 0)
         done = 0
         while True:

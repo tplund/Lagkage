@@ -24,6 +24,10 @@ PyInstaller virker ikke med Python 3.10.0, så der bygges med venv'en på Python
 
 Udfyld (Shift+F5 eller Shift+Backspace) har valget "Indholdsbevidst". Det bruger LaMa (open source), som kører lokalt på CPU via onnxruntime. Modellen ligger i `%LOCALAPPDATA%\Lagkage\models\lama_fp32.onnx` (208 MB) og hentes automatisk, hvis den mangler. Programmet indlæser den i baggrunden ved opstart, og en udfyldning tager cirka 5 sekunder. Meget store huller bliver lidt bløde, fordi modellen arbejder i 512 × 512 px.
 
+## Marker motiv
+
+Marker > Motiv, eller knappen i indstillingslinjen for markeringsværktøjerne. Det bruger ISNet (open source, fra rembg-projektet) lokalt via onnxruntime. Modellen ligger i `%LOCALAPPDATA%\Lagkage\models\isnet-general-use.onnx` (180 MB) og hentes automatisk, hvis den mangler.
+
 ## PSD-begrænsninger
 
 Tekst-, form- og smart object-lag bliver til pixellag ved åbning. Justeringslag udelades, og lagmasker og effekter bages ind i pixels. Grupper foldes ud til almindelige lag.

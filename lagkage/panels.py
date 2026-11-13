@@ -16,7 +16,8 @@ TOOLS = [
     ('lasso', 'Lasso (L)'),
     ('poly', 'Polygonlasso (Shift+L)'),
     ('wand', 'Tryllestav (W)'),
-    ('crop', None),
+    ('crop', 'Beskær (C)'),
+    ('sep', None),
     ('eyedropper', 'Pipette (I)'),
     ('brush', 'Pensel (B)'),
     ('eraser', 'Viskelæder (E)'),
@@ -112,7 +113,7 @@ class ToolBox(QWidget):
 
 # ---------------- indstillingslinje ----------------
 
-SEL_OPTS = [('mode',), ('spin', 'feather', 'Blødgør:', 0, 250, ' px')]
+SEL_OPTS = [('mode',), ('spin', 'feather', 'Blødgør:', 0, 250, ' px'), ('subject',)]
 OPTION_SPECS = {
     'move': [('label', 'Alt-træk kopierer  ·  Shift låser retningen  ·  Ctrl+T transformerer  ·  piletaster skubber 1 px (Shift: 10 px)')],
     'rect': SEL_OPTS,
@@ -121,13 +122,17 @@ OPTION_SPECS = {
     'poly': SEL_OPTS + [('check', 'antialias', 'Udjævning'),
                         ('label', 'Klik for hjørner · dobbeltklik eller Enter lukker · Esc annullerer')],
     'wand': [('mode',), ('spin', 'tolerance', 'Tolerance:', 0, 255, ''),
-             ('check', 'contiguous', 'Sammenhængende'), ('check', 'sample_all', 'Prøve fra alle lag')],
+             ('check', 'contiguous', 'Sammenhængende'), ('check', 'sample_all', 'Prøve fra alle lag'), ('subject',)],
     'eyedropper': [('check', 'eyedrop_all', 'Prøve fra alle lag'), ('label', 'Alt-klik sætter baggrundsfarven')],
-    'brush': [('spin', 'size', 'Størrelse:', 1, 2500, ' px'), ('spin', 'opacity', 'Opacitet:', 1, 100, ' %'),
-              ('label', '[ og ] ændrer størrelse  ·  Shift-klik tegner en lige linje  ·  Alt-klik tager farve')],
-    'eraser': [('spin', 'size', 'Størrelse:', 1, 2500, ' px'), ('spin', 'opacity', 'Opacitet:', 1, 100, ' %')],
+    'brush': [('spin', 'size', 'Størrelse:', 1, 2500, ' px'), ('spin', 'hardness', 'Hårdhed:', 0, 100, ' %'),
+              ('spin', 'opacity', 'Opacitet:', 1, 100, ' %'),
+              ('label', '[ ] størrelse  ·  Shift+[ ] hårdhed  ·  Shift-klik tegner en lige linje  ·  Alt-klik tager farve')],
+    'eraser': [('spin', 'size', 'Størrelse:', 1, 2500, ' px'), ('spin', 'hardness', 'Hårdhed:', 0, 100, ' %'),
+               ('spin', 'opacity', 'Opacitet:', 1, 100, ' %')],
     'bucket': [('spin', 'tolerance', 'Tolerance:', 0, 255, ''), ('check', 'contiguous', 'Sammenhængende'),
                ('check', 'sample_all', 'Prøve fra alle lag'), ('spin', 'opacity', 'Opacitet:', 1, 100, ' %')],
+    'crop': [('label', 'Træk i håndtagene eller tegn en ny ramme  ·  Enter eller dobbeltklik beskærer  ·  Esc nulstiller'),
+             ('cropbtns',)],
     'hand': [('label', 'Træk for at panorere  ·  Ctrl+0 tilpasser  ·  Ctrl+1 = 100 %')],
     'zoom': [('label', 'Klik zoomer ind  ·  Alt-klik zoomer ud  ·  Ctrl/Alt + hjul zoomer')],
 }
@@ -180,6 +185,21 @@ class OptionsBar(QWidget):
                 l.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
                 l.setMinimumWidth(40)
                 self.lay.addWidget(l)
+            elif kind == 'subject':
+                b = QToolButton()
+                b.setText('Marker motiv')
+                b.setToolTip('Markér personen eller tingen i billedet (Shift: tilføj, Alt: træk fra)')
+                b.setFocusPolicy(Qt.NoFocus)
+                b.setStyleSheet('QToolButton { border:1px solid #555; padding:2px 8px; }')
+                b.clicked.connect(lambda: self.win.doc() and self.win.select_subject())
+                self.lay.addWidget(b)
+            elif kind == 'cropbtns':
+                for txt, fn in (('✕  Nulstil (Esc)', 'start_crop'), ('✓  Beskær (Enter)', 'commit_crop')):
+                    b = QToolButton()
+                    b.setText(txt)
+                    b.setFocusPolicy(Qt.NoFocus)
+                    b.clicked.connect(lambda _=False, f=fn: self.win.canvas() and getattr(self.win.canvas(), f)())
+                    self.lay.addWidget(b)
             elif kind == 'mode':
                 grp = QButtonGroup(self)
                 for key, ic, tip in MODE_BTNS:

@@ -30,7 +30,7 @@ class MainWindow(QMainWindow):
         self.fg, self.bg = QColor(0, 0, 0), QColor(255, 255, 255)
         self.tool = 'move'
         self.opt = dict(selmode='new', feather=0, antialias=True, tolerance=32, contiguous=True,
-                        sample_all=False, eyedrop_all=True, size=20, opacity=100)
+                        sample_all=False, eyedrop_all=True, size=20, hardness=100, opacity=100)
         self.clip_origin = None
         self._last_marquee, self._last_lasso = 'rect', 'lasso'
 
@@ -140,6 +140,8 @@ class MainWindow(QMainWindow):
         self.refresh_layers()
         self.update_status()
         c = self.canvas()
+        if c and self.tool == 'crop' and c.crop is None:
+            c.start_crop()
         self.options.build(self.tool, bool(c and c.transforming))
         if c:
             c.setFocus()
@@ -155,6 +157,11 @@ class MainWindow(QMainWindow):
             c.end_transform(True)
         if c and c.poly is not None and name != 'poly':
             c.poly = None
+        if c:
+            if name == 'crop':
+                c.start_crop()
+            else:
+                c.cancel_crop()
         self.tool = name
         if name in ('rect', 'ellipse'):
             self._last_marquee = name
@@ -198,6 +205,14 @@ class MainWindow(QMainWindow):
         c = self.canvas()
         if c:
             c.update()
+            c.setFocus()
+
+    def brush_hardness(self, d):
+        self.opt['hardness'] = max(0, min(100, self.opt['hardness'] + d))
+        self.options.build(self.tool)
+        self.flash(f"Hårdhed {self.opt['hardness']} %", 1500)
+        c = self.canvas()
+        if c:
             c.setFocus()
 
     def on_transform_mode(self, on):
@@ -329,6 +344,8 @@ class MainWindow(QMainWindow):
         self._act(mm, 'Blødgør…', self._need(lambda: self.modify_sel('Blødgør', io_.feather)), 'Shift+F6')
         self._act(mm, 'Udvid…', self._need(lambda: self.modify_sel('Udvid', io_.expand)))
         self._act(mm, 'Formindsk…', self._need(lambda: self.modify_sel('Formindsk', io_.contract)))
+        self._act(m, 'Motiv', self._need(self.select_subject))
+        m.addSeparator()
         self._act(m, 'Indlæs lagets pixels som markering', self._need(
             lambda: self._doc_op('Indlæs markering', lambda d: d.selection_from_layer(d.layer))))
 
@@ -343,7 +360,7 @@ class MainWindow(QMainWindow):
 
         # værktøjsgenveje (uden menu)
         for key, name in (('V', 'move'), ('I', 'eyedropper'), ('B', 'brush'), ('E', 'eraser'),
-                          ('G', 'bucket'), ('H', 'hand'), ('Z', 'zoom'), ('W', 'wand')):
+                          ('G', 'bucket'), ('H', 'hand'), ('Z', 'zoom'), ('W', 'wand'), ('C', 'crop')):
             self._act(None, name, lambda n=name: self.set_tool(n), key)
         self._act(None, 'marquee', lambda: self.set_tool(self._last_marquee if self.tool not in ('rect', 'ellipse') else self.tool), 'M')
         self._act(None, 'marquee2', lambda: self.cycle('rect', 'ellipse', '_last_marquee'), 'Shift+M')
@@ -353,6 +370,8 @@ class MainWindow(QMainWindow):
         self._act(None, 'X', self.swap_colors, 'X')
         self._act(None, '[', lambda: self.brush_size(-1), '[')
         self._act(None, ']', lambda: self.brush_size(1), ']')
+        self._act(None, '{', lambda: self.brush_hardness(-25), ['Shift+[', '{'])
+        self._act(None, '}', lambda: self.brush_hardness(25), ['Shift+]', '}'])
 
     # ================= dokumenter =================
     def add_document(self, doc, warnings=()):
@@ -756,28 +775,8 @@ class MainWindow(QMainWindow):
         if d.selection is None:
             self.flash('Markér det, der skal fjernes, og prøv igen.')
             return
-        if not inpaint.model_ready():
-            r = QMessageBox.question(self, APP, 'Indholdsbevidst udfyld bruger en open source-model (LaMa, ca. 200 MB), '
-                                     'der kører på din egen computer. Skal den hentes nu?')
-            if r != QMessageBox.Yes:
-                return
-            dlg = QProgressDialog('Henter model…', 'Annullér', 0, 100, self)
-            dlg.setWindowModality(Qt.WindowModal)
-            dlg.show()
-
-            def prog(done, total):
-                dlg.setValue(int(done * 100 / total) if total else 0)
-                QApplication.processEvents()
-                return not dlg.wasCanceled()
-            try:
-                ok = inpaint.download_model(prog)
-            except Exception as e:
-                dlg.close()
-                QMessageBox.warning(self, APP, 'Modellen kunne ikke hentes: ' + str(e))
-                return
-            dlg.close()
-            if not ok:
-                return
+        if not self._ensure_model(inpaint, 'Indholdsbevidst udfyld bruger en open source-model (LaMa, ca. 200 MB)'):
+            return
         self.flash('Udfylder …', 60000)
         QApplication.setOverrideCursor(Qt.WaitCursor)
         QApplication.processEvents()
@@ -793,6 +792,60 @@ class MainWindow(QMainWindow):
             return
         QApplication.restoreOverrideCursor()
         self.flash('Udfyldt. Ctrl+D fravælger, Ctrl+Z fortryder.')
+        self.refresh_layers()
+
+    def _ensure_model(self, module, what):
+        """Spørg og hent en lokal model første gang, den bruges."""
+        from PySide6.QtWidgets import QProgressDialog
+        if module.model_ready():
+            return True
+        r = QMessageBox.question(self, APP, what + ', der kører på din egen computer. Skal den hentes nu?')
+        if r != QMessageBox.Yes:
+            return False
+        dlg = QProgressDialog('Henter model…', 'Annullér', 0, 100, self)
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.show()
+
+        def prog(done, total):
+            dlg.setValue(int(done * 100 / total) if total else 0)
+            QApplication.processEvents()
+            return not dlg.wasCanceled()
+        try:
+            ok = module.download_model(prog)
+        except Exception as e:
+            dlg.close()
+            QMessageBox.warning(self, APP, 'Modellen kunne ikke hentes: ' + str(e))
+            return False
+        dlg.close()
+        return bool(ok)
+
+    def select_subject(self):
+        from . import subject
+        d = self.doc()
+        c = self.canvas()
+        if c.transforming:
+            c.end_transform(True)
+        if not self._ensure_model(subject, 'Marker motiv bruger en open source-model (ISNet, ca. 180 MB)'):
+            return
+        mods = QApplication.keyboardModifiers()
+        mode = 'add' if mods & Qt.ShiftModifier else 'sub' if mods & Qt.AltModifier else 'new'
+        self.flash('Finder motivet …', 60000)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.processEvents()
+        try:
+            d.begin('Marker motiv')
+            rgb = io_.argb_np(d.flatten_image(QColor(255, 255, 255)))[:, :, [2, 1, 0]]
+            import numpy as np
+            m = subject.subject_mask(np.ascontiguousarray(rgb))
+            d.apply_selection(m, mode)
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            d.cancel_begin()
+            QMessageBox.warning(self, APP, 'Marker motiv fejlede: ' + str(e))
+            return
+        QApplication.restoreOverrideCursor()
+        self.flash('Motivet er markeret. Shift/Alt med et markeringsværktøj retter til.' if d.selection is not None
+                   else 'Der blev ikke fundet et tydeligt motiv.')
         self.refresh_layers()
 
     def layer_transform(self, m):
@@ -991,14 +1044,17 @@ class MainWindow(QMainWindow):
 
 HELP = """Værktøjer
 V flyt · M markering (Shift+M skifter rektangel/ellipse) · L lasso (Shift+L polygon)
-W tryllestav · I pipette · B pensel · E viskelæder · G spand · H hånd · Z zoom
-Mellemrum = hånd midlertidigt · Ctrl = flyt midlertidigt
+W tryllestav · C beskær · I pipette · B pensel · E viskelæder · G spand · H hånd · Z zoom
+Mellemrum = hånd · Ctrl+mellemrum = zoom ind · Ctrl+Alt+mellemrum = zoom ud · Ctrl = flyt midlertidigt
+Højreklik på billedet vælger et af lagene under musen
+[ ] penselstørrelse · Shift+[ ] hårdhed
 
 Markering
 Shift = tilføj · Alt = træk fra · Shift+Alt = fællesmængde
 Ctrl+A alt · Ctrl+D fravælg · Ctrl+Shift+D vælg igen · Ctrl+Shift+I omvendt · Shift+F6 blødgør
 Træk inde i en markering med et markeringsværktøj for at flytte omridset
 Ctrl-klik på et lags miniature indlæser lagets pixels som markering
+Marker > Motiv (eller knappen Marker motiv) markerer personen/tingen i billedet
 
 Flyt og transformér
 Flyt med markering flytter pixels; uden markering flyttes hele laget

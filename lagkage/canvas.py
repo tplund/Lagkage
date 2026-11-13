@@ -38,6 +38,7 @@ class Canvas(QWidget):
         self.mouse = None           # skærmposition
         self.space = False
         self.transforming = False
+        self.crop = None            # QRectF i dokumentkoordinater, når beskæringsværktøjet er aktivt
         self.last_brush = None
         self.ant_phase = 0
         self._fitted = False
@@ -168,6 +169,8 @@ class Canvas(QWidget):
             self._stroke_path(p, path, vt)
         if self.transforming and self.doc.floating is not None:
             self._paint_transform_box(p, vt)
+        if self.crop is not None:
+            self._paint_crop(p, vt)
         tool = self.effective_tool()
         if tool in ('brush', 'eraser') and self.mouse is not None and self.underMouse():
             r = max(1.0, self.win.opt['size'] * self.zoom / 2)
@@ -303,6 +306,9 @@ class Canvas(QWidget):
             self.drag = dict(kind='pan', start=sp, off=QPointF(self.offset))
             self.update_cursor()
             return
+        if e.button() == Qt.RightButton:
+            self._layer_menu(pos, e.globalPosition().toPoint())
+            return
         if e.button() != Qt.LeftButton:
             return
         tool = self.effective_tool(mods)
@@ -330,6 +336,8 @@ class Canvas(QWidget):
             else:
                 self.drag = dict(kind='marquee', tool=tool, start=pos, mode=mode,
                                  mode_mods_free=no_mods or not doc.has_selection())
+        elif tool == 'crop':
+            self._press_crop(pos, sp)
         elif tool == 'poly':
             self._press_poly(pos, sp, mods)
         elif tool == 'wand':
@@ -429,6 +437,33 @@ class Canvas(QWidget):
         else:
             self.win.set_fg(c)
 
+    def layers_at(self, pos):
+        """Indekser på synlige lag med pixels under punktet, øverste først."""
+        x, y = int(math.floor(pos.x())), int(math.floor(pos.y()))
+        hits = []
+        for i in range(len(self.doc.layers) - 1, -1, -1):
+            L = self.doc.layers[i]
+            lx, ly = x - L.pos.x(), y - L.pos.y()
+            if L.visible and 0 <= lx < L.image.width() and 0 <= ly < L.image.height() \
+                    and L.image.pixelColor(lx, ly).alpha() > 10:
+                hits.append(i)
+        return hits
+
+    def _layer_menu(self, pos, gpos):
+        """Højreklik: vælg et af lagene under musen, som i Photoshop."""
+        from PySide6.QtWidgets import QMenu
+        hits = self.layers_at(pos)
+        m = QMenu(self)
+        if not hits:
+            a = m.addAction('Ingen lag med pixels her')
+            a.setEnabled(False)
+        for i in hits:
+            a = m.addAction(self.doc.layers[i].name)
+            a.setCheckable(True)
+            a.setChecked(i == self.doc.active)
+            a.triggered.connect(lambda _=False, i=i: self.win.set_active_layer(i))
+        m.exec(gpos)
+
     def _stroke_to(self, a, b):
         doc = self.doc
         s = doc.stroke
@@ -436,7 +471,10 @@ class Canvas(QWidget):
         col = QColor(self.win.fg) if not s.erase else QColor(0, 0, 0)
         p = QPainter(s.image)
         p.setRenderHint(QPainter.Antialiasing, size > 2)
-        if QLineF(a, b).length() < 0.01:
+        hard = self.win.opt['hardness']
+        if hard < 100 and size > 2:
+            self._soft_dabs(p, s, a, b, size, hard, col)
+        elif QLineF(a, b).length() < 0.01:
             p.setPen(Qt.NoPen)
             p.setBrush(col)
             if size <= 1:
@@ -454,6 +492,44 @@ class Canvas(QWidget):
         p.end()
         self.last_brush = b
         doc.touch()
+
+    def _soft_dabs(self, p, s, a, b, size, hard, col):
+        """Blød pensel: stempler med radial overgang langs strøget (som Photoshops hårdhed)."""
+        from PySide6.QtGui import QRadialGradient
+        key = (size, hard, col.rgba())
+        if getattr(s, 'dab_key', None) != key:
+            d = int(math.ceil(size)) + 2
+            dab = new_image(d, d)
+            g = QRadialGradient(QPointF(d / 2, d / 2), size / 2)
+            h = hard / 100.0
+            c0, c1, c2 = QColor(col), QColor(col), QColor(col)
+            c0.setAlpha(255)
+            c1.setAlpha(110)
+            c2.setAlpha(0)
+            g.setColorAt(0, c0)
+            g.setColorAt(h, c0)
+            g.setColorAt(h + (1 - h) * 0.5, c1)
+            g.setColorAt(1, c2)
+            dp = QPainter(dab)
+            dp.setPen(Qt.NoPen)
+            dp.setBrush(g)
+            dp.drawEllipse(QPointF(d / 2, d / 2), size / 2, size / 2)
+            dp.end()
+            s.dab, s.dab_key, s.dab_rest = dab, key, 0.0
+        dab = s.dab
+        half = dab.width() / 2
+        spacing = max(1.0, size * 0.08)
+        length = QLineF(a, b).length()
+        if length < 0.01:
+            p.drawImage(QPointF(b.x() - half, b.y() - half), dab)
+            s.dab_rest = 0.0
+            return
+        t = spacing - s.dab_rest
+        while t <= length:
+            q = a + (b - a) * (t / length)
+            p.drawImage(QPointF(q.x() - half, q.y() - half), dab)
+            t += spacing
+        s.dab_rest = length - (t - spacing)
 
     def _commit_stroke(self):
         doc = self.doc
@@ -493,6 +569,8 @@ class Canvas(QWidget):
         if k == 'pan':
             self.offset = d['off'] + (sp - d['start'])
             self.update()
+        elif k.startswith('c_'):
+            self._drag_crop(d, pos)
         elif k == 'zoomdrag':
             dx = sp.x() - d['start'].x()
             if abs(dx) > 3:
@@ -588,6 +666,13 @@ class Canvas(QWidget):
         doc = self.doc
         pos = self.to_doc(e.position())
         k = d['kind']
+        if k.startswith('c_'):
+            if self.crop is not None:
+                self.crop = self.crop.normalized()
+                if self.crop.width() < 1 or self.crop.height() < 1:
+                    self.start_crop()
+            self.update()
+            return
         if k == 'zoomdrag':
             if not d['moved']:
                 self.zoom_step(-1 if (d['out'] or e.modifiers() & Qt.AltModifier) else 1, d['start'])
@@ -625,6 +710,10 @@ class Canvas(QWidget):
         self.win.refresh_layers()
 
     def mouseDoubleClickEvent(self, e):
+        if self.crop is not None and self.win.tool == 'crop' and \
+                self.crop.contains(self.to_doc(e.position())):
+            self.commit_crop()
+            return
         if self.poly is not None:
             self.close_poly()
         else:
@@ -655,6 +744,12 @@ class Canvas(QWidget):
             return
         if k in (Qt.Key_Control, Qt.Key_Alt):
             self.update_cursor()
+        if self.crop is not None and k in (Qt.Key_Return, Qt.Key_Enter):
+            self.commit_crop()
+            return
+        if self.crop is not None and k == Qt.Key_Escape:
+            self.start_crop()
+            return
         if k in (Qt.Key_Return, Qt.Key_Enter):
             if self.transforming:
                 self.end_transform(True)
@@ -705,6 +800,93 @@ class Canvas(QWidget):
         else:
             doc.layer.pos = doc.layer.pos + QPoint(dx, dy)
         doc.touch()
+
+    # ---------- beskæring ----------
+    def start_crop(self):
+        self.crop = QRectF(self.doc.rect())
+        self.update()
+
+    def cancel_crop(self):
+        self.crop = None
+        self.update()
+
+    def commit_crop(self):
+        if self.crop is None:
+            return
+        r = self.crop.normalized().toRect()
+        if r.width() < 1 or r.height() < 1:
+            return
+        if r != self.doc.rect():
+            self.doc.begin('Beskær')
+            self.doc.crop(r)
+            self.doc.set_selection(None)
+            self.fit(max_zoom=1.0)
+        self.start_crop()
+        self.win.refresh_layers()
+
+    def _crop_handles(self, vt):
+        r = self.crop
+        return [vt.map(QPointF(r.left() + hx * r.width(), r.top() + hy * r.height())) for hx, hy in HANDLES]
+
+    def _paint_crop(self, p, vt):
+        r = vt.mapRect(self.crop.normalized())
+        outside = QPainterPath()
+        outside.addRect(QRectF(self.rect()))
+        inner = QPainterPath()
+        inner.addRect(r)
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing, False)
+        p.fillPath(outside.subtracted(inner), QColor(0, 0, 0, 150))
+        p.setPen(QPen(QColor(255, 255, 255, 90), 1))
+        for i in (1, 2):
+            x = r.left() + r.width() * i / 3
+            y = r.top() + r.height() * i / 3
+            p.drawLine(QPointF(x, r.top()), QPointF(x, r.bottom()))
+            p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y))
+        p.setPen(QPen(QColor(255, 255, 255), 1))
+        p.setBrush(Qt.NoBrush)
+        p.drawRect(r)
+        p.setBrush(QColor(255, 255, 255))
+        p.setPen(QPen(QColor(0, 0, 0), 1))
+        for q in self._crop_handles(vt):
+            p.drawRect(QRectF(q.x() - 4, q.y() - 4, 8, 8))
+        p.restore()
+
+    def _press_crop(self, pos, sp):
+        if self.crop is None:
+            self.start_crop()
+        for i, q in enumerate(self._crop_handles(self.view())):
+            if QLineF(q, sp).length() <= 9:
+                self.drag = dict(kind='c_resize', idx=i, r0=QRectF(self.crop))
+                return
+        if self.crop.contains(pos):
+            self.drag = dict(kind='c_move', start=pos, r0=QRectF(self.crop))
+        else:
+            self.drag = dict(kind='c_new', start=QPointF(round(pos.x()), round(pos.y())))
+
+    def _drag_crop(self, d, pos):
+        x, y = round(pos.x()), round(pos.y())
+        if d['kind'] == 'c_new':
+            self.crop = QRectF(d['start'], QPointF(x, y))
+        elif d['kind'] == 'c_move':
+            r = QRectF(d['r0'])
+            r.translate(round(pos.x() - d['start'].x()), round(pos.y() - d['start'].y()))
+            self.crop = r
+        else:
+            r = QRectF(d['r0'])
+            hx, hy = HANDLES[d['idx']]
+            if hx == 0:
+                r.setLeft(x)
+            elif hx == 1:
+                r.setRight(x)
+            if hy == 0:
+                r.setTop(y)
+            elif hy == 1:
+                r.setBottom(y)
+            self.crop = r
+        n = self.crop.normalized()
+        self.win.st_pos.setText(f'{int(n.width())} × {int(n.height())} px')
+        self.update()
 
     # ---------- frit transformér ----------
     def start_transform(self):
