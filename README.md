@@ -13,6 +13,16 @@ PyInstaller virker ikke med Python 3.10.0, så der bygges med venv'en på Python
 .venv\Scripts\python.exe -m PyInstaller --noconfirm --windowed --name Lagkage --icon lagkage/lagkage.ico --add-data "lagkage/lagkage.ico;lagkage" --exclude-module tkinter --exclude-module matplotlib run.py
 ```
 
+## Installer (til at dele programmet)
+
+Byg først exe'en (se ovenfor), og byg derefter installeren med Inno Setup:
+
+```
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer\Lagkage.iss
+```
+
+Resultatet er `installer\Output\Lagkage-Setup-1.0.exe` (ca. 70 MB). Den installerer uden administratorrettigheder i `%LOCALAPPDATA%\Programs\Lagkage`. Den laver genveje i Start-menuen (og på skrivebordet, hvis man vælger det) og føjer Lagkage til "Åbn med". Man kan også vælge, at PSD-filer åbner i Lagkage. Afinstallation sker under Indstillinger > Apps. AI-modellerne er ikke med i installeren. De hentes, første gang man bruger funktionerne.
+
 ## Opbygning
 
 - `lagkage/document.py` – lag, markering (Alpha8-maske), flydende pixels, fortryd og PSD-I/O (psd-tools)
