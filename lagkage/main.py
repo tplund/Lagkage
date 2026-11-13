@@ -47,6 +47,11 @@ def main():
     os.environ.setdefault('QT_ENABLE_HIGHDPI_SCALING', '1')
     app = QApplication(sys.argv)
     app.setApplicationName('Lagkage')
+    # danske standardknapper (Annullér, Ja, Nej, Gem …)
+    from PySide6.QtCore import QTranslator, QLibraryInfo, QLocale
+    tr = QTranslator(app)
+    if tr.load(QLocale(QLocale.Danish), 'qtbase', '_', QLibraryInfo.path(QLibraryInfo.TranslationsPath)):
+        app.installTranslator(tr)
     app.setStyle('Fusion')
     pal = QPalette()
     for role, col in ((QPalette.Window, '#323232'), (QPalette.WindowText, '#dcdcdc'), (QPalette.Base, '#262626'),

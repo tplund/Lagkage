@@ -273,24 +273,64 @@ class LayersList(QWidget):
 
     def _thumb(self, L):
         doc = self.doc
-        key = (id(L), L.image.cacheKey(), L.pos.x(), L.pos.y(), doc.width, doc.height,
+        key = ('px', id(L), L.kind, L.image.cacheKey(), L.pos.x(), L.pos.y(), doc.width, doc.height,
                id(doc.floating) if doc.floating and doc.floating.layer is L else 0)
-        t = self._thumbs.get(id(L))
+        t = self._thumbs.get(('px', id(L)))
         if t and t[0] == key:
             return t[1]
-        from PySide6.QtGui import QImage, QTransform
         from .imageops import new_image
         s = min(THUMB / doc.width, THUMB / doc.height)
         w, h = max(1, round(doc.width * s)), max(1, round(doc.height * s))
         img = new_image(w, h)
         p = QPainter(img)
-        p.fillRect(img.rect(), self._checker)
-        p.setRenderHint(QPainter.SmoothPixmapTransform, True)
-        p.scale(s, s)
-        p.drawImage(L.pos, L.image)
+        if L.is_adjust:
+            p.fillRect(img.rect(), QColor('#3a3a3a'))
+            p.setRenderHint(QPainter.Antialiasing, True)
+            c = QRect(w // 2 - 9, h // 2 - 9, 18, 18)
+            p.setPen(QPen(QColor('#ddd'), 1.5))
+            p.setBrush(QColor('#ddd'))
+            p.drawPie(c, 90 * 16, 180 * 16)
+            p.setBrush(QColor('#222'))
+            p.drawPie(c, -90 * 16, 180 * 16)
+        else:
+            p.fillRect(img.rect(), self._checker)
+            p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+            p.scale(s, s)
+            p.drawImage(L.pos, L.image)
         p.end()
-        self._thumbs[id(L)] = (key, img)
+        self._thumbs[('px', id(L))] = (key, img)
         return img
+
+    def _mask_thumb(self, L):
+        doc = self.doc
+        key = ('mk', L.mask.cacheKey(), L.mask_pos.x(), L.mask_pos.y(), L.mask_default, L.mask_enabled,
+               doc.width, doc.height)
+        t = self._thumbs.get(('mk', id(L)))
+        if t and t[0] == key:
+            return t[1]
+        from .imageops import new_image
+        s = min(THUMB / doc.width, THUMB / doc.height)
+        w, h = max(1, round(doc.width * s)), max(1, round(doc.height * s))
+        img = new_image(w, h, QColor(L.mask_default, L.mask_default, L.mask_default))
+        p = QPainter(img)
+        p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        p.save()
+        p.scale(s, s)
+        p.drawImage(L.mask_pos, L.mask)
+        p.restore()
+        if not L.mask_enabled:
+            p.setPen(QPen(QColor('#e03030'), 2))
+            p.drawLine(0, 0, w, h)
+            p.drawLine(w, 0, 0, h)
+        p.end()
+        self._thumbs[('mk', id(L))] = (key, img)
+        return img
+
+    def _cols(self, L):
+        t1 = EYE_W + 6
+        t2 = t1 + THUMB + 6
+        nx = (t2 if L.mask is not None else t1) + THUMB + 10
+        return t1, t2, nx
 
     def paintEvent(self, e):
         doc = self.doc
@@ -312,17 +352,24 @@ class LayersList(QWidget):
             p.drawLine(EYE_W, y, EYE_W, y + ROW_H - 1)
             if L.visible:
                 p.drawPixmap(EYE_W // 2 - 9, y + ROW_H // 2 - 9, svg_pixmap('eye', 18))
-            t = self._thumb(L)
-            tx = EYE_W + 8 + (THUMB - t.width()) // 2
-            ty = y + (ROW_H - t.height()) // 2
-            p.drawImage(tx, ty, t)
-            p.setPen(QColor('#111'))
-            p.drawRect(tx - 1, ty - 1, t.width() + 1, t.height() + 1)
+            t1, t2, nx = self._cols(L)
+            on_mask = i == doc.active and doc.editing_mask()
+            for x0, img, is_mask in ((t1, self._thumb(L), False),
+                                     (t2, self._mask_thumb(L) if L.mask is not None else None, True)):
+                if img is None:
+                    continue
+                tx = x0 + (THUMB - img.width()) // 2
+                ty = y + (ROW_H - img.height()) // 2
+                p.drawImage(tx, ty, img)
+                target = i == doc.active and (on_mask == is_mask) and not (L.is_adjust and not is_mask)
+                p.setPen(QPen(QColor('#ffffff') if target else QColor('#111'), 2 if target else 1))
+                p.setBrush(Qt.NoBrush)
+                p.drawRect(tx - 1, ty - 1, img.width() + 1, img.height() + 1)
             p.setPen(QColor('#e8e8e8') if L.visible else QColor('#8a8a8a'))
-            nx = EYE_W + THUMB + 18
             name = fm.elidedText(L.name, Qt.ElideRight, self.width() - nx - 8)
             has_info = L.opacity < 1 or L.blend != 'normal'
-            name_rect = QRect(nx, y + 4, self.width() - nx - 4, ROW_H // 2 - 2) if has_info else                 QRect(nx, y, self.width() - nx - 4, ROW_H)
+            name_rect = QRect(nx, y + 4, self.width() - nx - 4, ROW_H // 2 - 2) if has_info else \
+                QRect(nx, y, self.width() - nx - 4, ROW_H)
             p.drawText(name_rect, (Qt.AlignBottom if has_info else Qt.AlignVCenter) | Qt.AlignLeft, name)
             if has_info:
                 p.setPen(QColor('#8a8a8a'))
@@ -349,8 +396,9 @@ class LayersList(QWidget):
             return
         win = self.panel.win
         L = doc.layers[i]
+        mods = e.modifiers()
         if x < EYE_W:
-            if e.modifiers() & Qt.AltModifier:
+            if mods & Qt.AltModifier:
                 others = [M for M in doc.layers if M is not L]
                 solo = all(not M.visible for M in others)
                 for M in others:
@@ -362,12 +410,32 @@ class LayersList(QWidget):
             doc.touch()
             win.refresh_layers()
             return
-        if e.modifiers() & Qt.ControlModifier and x < EYE_W + THUMB + 14:
+        t1, t2, nx = self._cols(L)
+        on_mask_thumb = L.mask is not None and t2 <= x < t2 + THUMB + 4
+        on_px_thumb = t1 <= x < t1 + THUMB + 4
+        if mods & Qt.ControlModifier and (on_mask_thumb or (on_px_thumb and L.is_adjust)):
+            doc.begin('Indlæs markering')
+            doc.selection_from_mask(L)
+            win.refresh_layers()
+            return
+        if mods & Qt.ControlModifier and on_px_thumb:
             doc.begin('Indlæs markering')
             doc.selection_from_layer(L)
             win.refresh_layers()
             return
+        if mods & Qt.ShiftModifier and on_mask_thumb:
+            doc.begin('Maske til/fra')
+            L.mask_enabled = not L.mask_enabled
+            doc.touch()
+            win.refresh_layers()
+            return
         win.set_active_layer(i)
+        if on_mask_thumb:
+            doc.mask_target = True
+        elif on_px_thumb and not L.is_adjust:
+            doc.mask_target = False
+        doc.touch()
+        win.refresh_layers()
         self.drag = dict(start=e.position(), index=i, moving=False, target_row=0)
 
     def mouseMoveEvent(self, e):
@@ -405,6 +473,23 @@ class LayersList(QWidget):
         if i is not None:
             win.set_active_layer(i)
         m = QMenu(self)
+        L = self.doc.layer
+        if L.is_adjust:
+            a = m.addAction('Rediger justering…')
+            a.triggered.connect(lambda: win.edit_adjustment())
+            m.addSeparator()
+        if L.mask is None:
+            a = m.addAction('Tilføj lagmaske')
+            a.triggered.connect(lambda: win.add_mask())
+        else:
+            for text, fn in (('Deaktivér lagmaske' if L.mask_enabled else 'Aktivér lagmaske', win.toggle_mask),
+                             ('Anvend lagmaske', lambda: win.delete_mask(apply=True)),
+                             ('Slet lagmaske', lambda: win.delete_mask(apply=False))):
+                if L.is_adjust and text != 'Deaktivér lagmaske' and text != 'Aktivér lagmaske':
+                    continue
+                a = m.addAction(text)
+                a.triggered.connect(lambda _=False, f=fn: f())
+        m.addSeparator()
         for text, fn, key in (('Nyt lag', win.new_layer, 'Ctrl+Shift+N'),
                               ('Duplikér lag', win.duplicate_layer, 'Ctrl+J'),
                               ('Omdøb lag', win.rename_layer, 'F2'),
@@ -426,7 +511,16 @@ class LayersList(QWidget):
 
     def mouseDoubleClickEvent(self, e):
         i = self.row_layer_index(e.position().y())
-        if i is None or e.position().x() < EYE_W + THUMB + 14:
+        if i is None:
+            return
+        L = self.doc.layers[i]
+        t1, t2, nx = self._cols(L)
+        x = e.position().x()
+        if x < EYE_W:
+            return
+        if x < nx - 4:
+            if L.is_adjust and x < t1 + THUMB + 4:
+                self.panel.win.edit_adjustment()
             return
         self.start_rename(i)
 
@@ -434,7 +528,7 @@ class LayersList(QWidget):
         doc = self.doc
         n = len(doc.layers)
         row = n - 1 - i
-        nx = EYE_W + THUMB + 14
+        nx = self._cols(doc.layers[i])[2] - 4
         ed = QLineEdit(doc.layers[i].name, self)
         ed.setGeometry(nx, row * ROW_H + 10, self.width() - nx - 6, ROW_H - 20)
         ed.selectAll()
@@ -491,7 +585,22 @@ class LayersPanel(QWidget):
         bottom = QHBoxLayout()
         bottom.setContentsMargins(6, 4, 6, 4)
         bottom.addStretch(1)
-        for ic, tip, fn in (('new_layer', 'Nyt lag (Ctrl+Shift+N)', win.new_layer),
+        adj_btn = QToolButton()
+        adj_btn.setIcon(icon('adjust', 18))
+        adj_btn.setToolTip('Nyt justeringslag')
+        adj_btn.setFocusPolicy(Qt.NoFocus)
+        adj_btn.setPopupMode(QToolButton.InstantPopup)
+        from PySide6.QtWidgets import QMenu
+        from . import adjust as adj_
+        am = QMenu(adj_btn)
+        for k, label, key in adj_.TYPES:
+            a = am.addAction(label + ('…' if k in adj_.HAS_DIALOG else ''))
+            a.triggered.connect(lambda _=False, k=k: win.new_adjustment(k))
+        adj_btn.setMenu(am)
+        adj_btn.setStyleSheet('QToolButton::menu-indicator { image: none; }')
+        bottom.addWidget(adj_btn)
+        for ic, tip, fn in (('mask', 'Tilføj lagmaske (fra markeringen, hvis der er en)', lambda: win.add_mask()),
+                            ('new_layer', 'Nyt lag (Ctrl+Shift+N)', win.new_layer),
                             ('dup_layer', 'Duplikér lag (Ctrl+J)', win.duplicate_layer),
                             ('merge', 'Flet ned (Ctrl+E)', win.merge_down),
                             ('trash', 'Slet lag', win.delete_layer)):

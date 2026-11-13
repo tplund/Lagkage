@@ -361,9 +361,15 @@ class Canvas(QWidget):
             if not doc.layer.visible:
                 self.win.flash('Laget er skjult. Gør det synligt for at male på det.')
                 return
+            on_mask = doc.editing_mask()
+            if doc.layer.is_adjust and not on_mask:
+                self.win.flash('Et justeringslag har ingen pixels. Tilføj en maske for at male på det.')
+                return
             doc.begin('Viskelæder' if tool == 'eraser' else 'Pensel')
-            doc.stroke = Stroke(doc.width, doc.height, doc.layer, tool == 'eraser',
-                                self.win.opt['opacity'] / 100.0)
+            # på en maske maler penslen med forgrundsfarvens gråtone og viskelæderet med baggrundens
+            doc.stroke = Stroke(doc.width, doc.height, doc.layer, tool == 'eraser' and not on_mask,
+                                self.win.opt['opacity'] / 100.0, on_mask=on_mask)
+            doc.stroke.mask_eraser = tool == 'eraser' and on_mask
             start = self.last_brush if (mods & Qt.ShiftModifier and self.last_brush is not None) else pos
             self._stroke_to(start, pos)
             self.drag = dict(kind='stroke', last=pos)
@@ -386,6 +392,11 @@ class Canvas(QWidget):
         alt = bool(mods & Qt.AltModifier)
         if not doc.layer.visible and doc.floating is None:
             self.win.flash('Laget er skjult.')
+            return
+        if doc.floating is None and (doc.layer.is_adjust or doc.editing_mask()):
+            doc.begin('Flyt')
+            self.drag = dict(kind='layer', start=pos, p0=QPoint(doc.layer.pos), L=doc.layer, moved=False, alt=False)
+            doc.touch()
             return
         if doc.floating is not None or doc.selection is not None:
             doc.begin('Flyt', keep_float=True)
@@ -468,7 +479,12 @@ class Canvas(QWidget):
         doc = self.doc
         s = doc.stroke
         size = self.win.opt['size']
-        col = QColor(self.win.fg) if not s.erase else QColor(0, 0, 0)
+        if s.on_mask:
+            src = QColor(self.win.bg if getattr(s, 'mask_eraser', False) else self.win.fg)
+            g = round(src.red() * 0.299 + src.green() * 0.587 + src.blue() * 0.114)
+            col = QColor(g, g, g)
+        else:
+            col = QColor(self.win.fg) if not s.erase else QColor(0, 0, 0)
         p = QPainter(s.image)
         p.setRenderHint(QPainter.Antialiasing, size > 2)
         hard = self.win.opt['hardness']
@@ -538,6 +554,14 @@ class Canvas(QWidget):
             return
         doc.stroke = None
         L = s.layer
+        if s.on_mask:
+            L.ensure_mask_covers(doc.rect())
+            p = L.mask_painter()
+            p.setOpacity(s.opacity)
+            p.drawImage(0, 0, s.image)
+            p.end()
+            doc.touch()
+            return
         if not s.erase:
             L.ensure_covers(doc.rect())
         p = L.painter()

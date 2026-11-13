@@ -42,10 +42,14 @@ Resultatet er `installer\Output\Lagkage-Setup-1.0.exe` (ca. 70 MB). Den installe
 
 Udfyld (Shift+F5 eller Shift+Backspace) har valget "Indholdsbevidst". Det bruger LaMa (open source), som kører lokalt på CPU via onnxruntime. Modellen ligger i `%LOCALAPPDATA%\Lagkage\models\lama_fp32.onnx` (208 MB) og hentes automatisk, hvis den mangler. Programmet indlæser den i baggrunden ved opstart, og en udfyldning tager cirka 5 sekunder. Meget store huller bliver lidt bløde, fordi modellen arbejder i 512 × 512 px.
 
+## Justeringslag og masker
+
+Niveauer (Ctrl+L), Kurver (Ctrl+M), Lysstyrke/kontrast, Farvetone/mætning (Ctrl+U), Sort-hvid og Invertér ligger som justeringslag med live forhåndsvisning. Alle lag kan have en maske i gråtoner, som man maler på. I `.lagkage`-filer (en zip med PNG'er og `document.json`) forbliver alt redigerbart. Gemmes der som PSD, beholdes pixelmaskerne, mens justeringslag bliver bagt ind som pixellag med resultatet.
+
 ## Marker motiv
 
 Marker > Motiv, eller knappen i indstillingslinjen for markeringsværktøjerne. Det bruger ISNet (open source, fra rembg-projektet) lokalt via onnxruntime. Modellen ligger i `%LOCALAPPDATA%\Lagkage\models\isnet-general-use.onnx` (180 MB) og hentes automatisk, hvis den mangler.
 
 ## PSD-begrænsninger
 
-Tekst-, form- og smart object-lag bliver til pixellag ved åbning. Justeringslag udelades, og lagmasker og effekter bages ind i pixels. Grupper foldes ud til almindelige lag.
+Tekst-, form- og smart object-lag bliver til pixellag ved åbning. Justeringslag af typerne niveauer, kurver, lysstyrke/kontrast, farvetone/mætning, sort-hvid og invertér læses ind som redigerbare justeringslag; andre typer udelades. Pixelmasker på almindelige lag og justeringslag bevares. Effekter bages ind i pixels, og grupper foldes ud til almindelige lag.

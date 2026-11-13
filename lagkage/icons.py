@@ -23,6 +23,8 @@ SVG = {
     'new_layer': f'<rect {S} x="4" y="4" width="16" height="16" rx="1"/><path {S} d="M12 8v8M8 12h8"/>',
     'dup_layer': f'<rect {S} x="7" y="3" width="13" height="13" rx="1"/><path {S} d="M4 8v12h12"/>',
     'merge': f'<path {S} d="M5 4h14M5 9h14M12 12v8M8 16l4 4 4-4"/>',
+    'mask': f'<rect {S} x="3" y="5" width="18" height="14" rx="1"/><circle {F} cx="12" cy="12" r="4"/>',
+    'adjust': f'<circle {S} cx="12" cy="12" r="8"/><path {F} d="M12 4a8 8 0 0 1 0 16z"/>',
     'trash': f'<path {S} d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13M10 11v6M14 11v6"/>',
     'eye': f'<path {S} d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6S2 12 2 12z"/><circle {F} cx="12" cy="12" r="3"/>',
     'mode_new': f'<rect {F} x="5" y="5" width="14" height="14"/>',

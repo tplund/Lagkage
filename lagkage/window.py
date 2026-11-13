@@ -7,7 +7,8 @@ from PySide6.QtWidgets import (QMainWindow, QTabWidget, QDockWidget, QFileDialog
                                QComboBox, QDialogButtonBox, QCheckBox, QInputDialog, QApplication,
                                QColorDialog, QStatusBar)
 
-from .document import Document, Layer, load_document, save_psd, save_flat, FLAT_EXT
+from .document import (Document, Layer, load_document, save_psd, save_flat, save_lagkage, doc_needs_baking,
+                       FLAT_EXT)
 from .imageops import new_image, FMT
 from . import imageops as io_
 from .canvas import Canvas
@@ -15,9 +16,10 @@ from .panels import ToolBox, OptionsBar, LayersPanel
 from .icons import icon
 
 APP = 'Lagkage'
-OPEN_FILTER = 'Billeder (*.psd *.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff *.webp);;Alle filer (*)'
+OPEN_FILTER = 'Billeder (*.lagkage *.psd *.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff *.webp);;Alle filer (*)'
 SAVE_FILTERS = {
-    'Photoshop (*.psd)': '.psd', 'PNG (*.png)': '.png', 'JPEG (*.jpg)': '.jpg',
+    'Photoshop (*.psd)': '.psd', 'Lagkage-fil, alt kan rettes (*.lagkage)': '.lagkage',
+    'PNG (*.png)': '.png', 'JPEG (*.jpg)': '.jpg',
     'BMP (*.bmp)': '.bmp', 'WebP (*.webp)': '.webp', 'TIFF (*.tif)': '.tif',
 }
 
@@ -359,6 +361,8 @@ class MainWindow(QMainWindow):
         self._act(m, 'Ryd', self._clear_or_poly, ['Del', 'Backspace'])
         m.addSeparator()
         self._act(m, 'Udfyld…', self._need(self.fill_dialog), ['Shift+F5', 'Shift+Backspace'])
+        self._act(m, 'Invertér (pixels eller maske)', self._need(
+            lambda: self._doc_op('Invertér', lambda d: d.invert_target())), 'Ctrl+I')
         self._act(m, 'Indholdsbevidst udfyld', self._need(self.content_aware))
         self._act(m, 'Udfyld med forgrundsfarve', self._need(lambda: self.quick_fill(self.fg)), 'Alt+Backspace')
         self._act(m, 'Udfyld med baggrundsfarve', self._need(lambda: self.quick_fill(self.bg)), 'Ctrl+Backspace')
@@ -405,9 +409,26 @@ class MainWindow(QMainWindow):
         self._act(a, 'Flyt tilbage', self._need(lambda: self.arrange('down')), 'Ctrl+[')
         self._act(a, 'Placér nederst', self._need(lambda: self.arrange('bottom')), 'Ctrl+Shift+[')
         m.addSeparator()
-        self._act(m, 'Flet ned', self._need(lambda: self._doc_op('Flet ned', lambda d: d.merge_down())), 'Ctrl+E')
+        self._act(m, 'Flet ned', self._need(self.merge_down), 'Ctrl+E')
         self._act(m, 'Flet synlige', self._need(lambda: self._doc_op('Flet synlige', lambda d: d.merge_visible())), 'Ctrl+Shift+E')
         self._act(m, 'Gør til ét lag', self._need(lambda: self._doc_op('Gør til ét lag', lambda d: d.flatten())))
+        m.addSeparator()
+        from . import adjust as adj_
+        am = m.addMenu('Nyt justeringslag')
+        for k, label, key in adj_.TYPES:
+            self._act(am, label + ('…' if k in adj_.HAS_DIALOG else ''), self._need(lambda k=k: self.new_adjustment(k)),
+                      key)
+        self._act(m, 'Rediger justering…', self._need(self.edit_adjustment))
+        mk = m.addMenu('Lagmaske')
+        self._act(mk, 'Vis alt', self._need(lambda: self.add_mask('reveal_all')))
+        self._act(mk, 'Skjul alt', self._need(lambda: self.add_mask('hide_all')))
+        self._act(mk, 'Vis markering', self._need(lambda: self.add_mask('reveal_sel')))
+        self._act(mk, 'Skjul markering', self._need(lambda: self.add_mask('hide_sel')))
+        mk.addSeparator()
+        self._act(mk, 'Arbejd på masken / på pixels', self._need(self.toggle_target), 'Ctrl+\\')
+        self._act(mk, 'Aktivér/deaktivér', self._need(self.toggle_mask))
+        self._act(mk, 'Anvend', self._need(lambda: self.delete_mask(apply=True)))
+        self._act(mk, 'Slet', self._need(lambda: self.delete_mask(apply=False)))
         m.addSeparator()
         self._act(m, 'Vælg lag ovenover', self._need(lambda: self.select_layer_rel(1)), 'Alt+]')
         self._act(m, 'Vælg lag nedenunder', self._need(lambda: self.select_layer_rel(-1)), 'Alt+[')
@@ -583,8 +604,9 @@ class MainWindow(QMainWindow):
         if not doc:
             return False
         ext = os.path.splitext(doc.path or '')[1].lower()
-        if not doc.path or (ext in FLAT_EXT and len(doc.layers) > 1):
-            return self.save_as('.psd' if len(doc.layers) > 1 else None)
+        layered = len(doc.layers) > 1 or any(L.mask is not None or L.is_adjust for L in doc.layers)
+        if not doc.path or (ext in FLAT_EXT and layered):
+            return self.save_as('.psd' if layered else None)
         return self._write(doc, doc.path)
 
     def save_as(self, prefer=None):
@@ -612,10 +634,28 @@ class MainWindow(QMainWindow):
         c = self.canvas()
         if c and c.transforming:
             c.end_transform(True)
+        if ext in ('.psd', '.psb') and doc_needs_baking(doc):
+            box = QMessageBox(self)
+            box.setWindowTitle(APP)
+            box.setIcon(QMessageBox.Question)
+            box.setText('PSD kan ikke gemme justeringslag, så de kan rettes bagefter. '
+                        'I PSD-filen bliver de til almindelige lag med resultatet.')
+            box.setInformativeText('En Lagkage-fil gemmer alt, så du kan rette justeringer og masker senere.')
+            b_lk = box.addButton('Gem som Lagkage-fil', QMessageBox.AcceptRole)
+            b_psd = box.addButton('Gem PSD alligevel', QMessageBox.DestructiveRole)
+            box.addButton('Annullér', QMessageBox.RejectRole)
+            box.setDefaultButton(b_lk)
+            box.exec()
+            if box.clickedButton() is b_lk:
+                return self.save_as('.lagkage')
+            if box.clickedButton() is not b_psd:
+                return False
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             if ext in ('.psd', '.psb'):
                 save_psd(doc, path)
+            elif ext == '.lagkage':
+                save_lagkage(doc, path)
             else:
                 save_flat(doc, path)
         except Exception as e:
@@ -623,7 +663,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, APP, f'Kunne ikke gemme:\n{e}')
             return False
         QApplication.restoreOverrideCursor()
-        if ext in ('.psd', '.psb') or len(doc.layers) == 1:
+        flat_ok = len(doc.layers) == 1 and doc.layers[0].mask is None and not doc.layers[0].is_adjust
+        if ext in ('.psd', '.psb', '.lagkage') or flat_ok:
             doc.path = path
             doc.dirty = False
         else:
@@ -854,6 +895,9 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import QProgressDialog
         d = self.doc()
         d.commit_float()
+        if d.editing_mask() or d.layer.is_adjust:
+            self.flash('Indholdsbevidst udfyld virker på et pixellag, ikke på en maske.')
+            return
         if d.selection is None:
             self.flash('Markér det, der skal fjernes, og prøv igen.')
             return
@@ -928,6 +972,94 @@ class MainWindow(QMainWindow):
         QApplication.restoreOverrideCursor()
         self.flash('Motivet er markeret. Shift/Alt med et markeringsværktøj retter til.' if d.selection is not None
                    else 'Der blev ikke fundet et tydeligt motiv.')
+        self.refresh_layers()
+
+    # ================= justeringslag og masker =================
+    def _histogram_below(self, index):
+        from . import adjust as adj_
+        d = self.doc()
+        s = min(1.0, 600 / max(d.width, d.height))
+        img = new_image(max(1, round(d.width * s)), max(1, round(d.height * s)))
+        d.render(img, QTransform.fromScale(s, s), smooth=True, upto=index)
+        return adj_.histogram(img)
+
+    def new_adjustment(self, kind):
+        from . import adjust as adj_
+        from .adjust_dialogs import AdjustDialog
+        d = self.doc()
+        c = self.canvas()
+        if c.transforming:
+            c.end_transform(True)
+        d.begin('Nyt justeringslag')
+        L = d.add_adjustment(adj_.new(kind))
+        self.refresh_layers()
+        if kind in adj_.HAS_DIALOG:
+            dlg = AdjustDialog(self, d, L, self._histogram_below(d.active))
+            if dlg.exec() != QDialog.Accepted:
+                d.undo()
+                d.redo_stack.clear()
+        self.refresh_layers()
+
+    def edit_adjustment(self):
+        from . import adjust as adj_
+        from .adjust_dialogs import AdjustDialog
+        d = self.doc()
+        L = d.layer
+        if not L.is_adjust:
+            self.flash('Vælg et justeringslag først.')
+            return
+        if L.adjust['type'] not in adj_.HAS_DIALOG:
+            self.flash(f"{adj_.NAMES[L.adjust['type']]} har ingen indstillinger.")
+            return
+        d.begin('Rediger justering')
+        dlg = AdjustDialog(self, d, L, self._histogram_below(d.active))
+        if dlg.exec() != QDialog.Accepted:
+            d.cancel_begin()
+        self.refresh_layers()
+
+    def add_mask(self, mode=None):
+        d = self.doc()
+        if d is None:
+            return
+        if d.layer.mask is not None:
+            d.mask_target = True
+            d.touch()
+            self.refresh_layers()
+            self.flash('Laget har allerede en maske. Du arbejder nu på masken.')
+            return
+        if mode is None:
+            mode = 'reveal_sel' if d.selection is not None else 'reveal_all'
+        if mode in ('reveal_sel', 'hide_sel') and d.selection is None:
+            self.flash('Der er ingen markering.')
+            return
+        self._doc_op('Tilføj lagmaske', lambda d: d.add_mask(mode))
+        self.flash('Maske tilføjet. Mal med sort for at skjule og hvid for at vise (D, X bytter farver).', 6000)
+        self.refresh_layers()
+
+    def toggle_mask(self):
+        d = self.doc()
+        if d.layer.mask is None:
+            return
+        d.begin('Maske til/fra')
+        d.layer.mask_enabled = not d.layer.mask_enabled
+        d.touch()
+        self.refresh_layers()
+
+    def toggle_target(self):
+        d = self.doc()
+        L = d.layer
+        if L.mask is None or L.is_adjust:
+            return
+        d.mask_target = not d.mask_target
+        d.touch()
+        self.flash('Du arbejder nu på masken.' if d.mask_target else 'Du arbejder nu på lagets pixels.')
+        self.refresh_layers()
+
+    def delete_mask(self, apply=False):
+        d = self.doc()
+        if d.layer.mask is None or d.layer.is_adjust:
+            return
+        self._doc_op('Anvend lagmaske' if apply else 'Slet lagmaske', lambda d: d.delete_mask(apply))
         self.refresh_layers()
 
     def layer_transform(self, m):
@@ -1060,6 +1192,7 @@ class MainWindow(QMainWindow):
             c.end_transform(True)
         d.commit_float()
         d.active = i
+        d.mask_target = False
         d.touch()
         self.refresh_layers()
 
@@ -1086,7 +1219,11 @@ class MainWindow(QMainWindow):
         self.refresh_layers()
 
     def merge_down(self):
-        if self.doc():
+        d = self.doc()
+        if d:
+            if d.active > 0 and d.layers[d.active - 1].is_adjust:
+                self.flash('Et lag kan ikke flettes ned i et justeringslag.')
+                return
             self._doc_op('Flet ned', lambda d: d.merge_down())
             self.refresh_layers()
 
@@ -1152,6 +1289,14 @@ Lag
 Ctrl+Shift+N nyt lag · Ctrl+J lag via kopiering · Ctrl+Shift+J lag via klip
 Ctrl+E flet ned · Ctrl+Shift+E flet synlige · Ctrl+[ / Ctrl+] flyt lag ned/op
 Alt+[ / Alt+] vælg lag nedenunder/ovenover · Alt-klik på øjet viser kun det lag
+
+Justeringslag og masker
+Ctrl+L niveauer · Ctrl+M kurver · Ctrl+U farvetone/mætning · Alt+Shift+Ctrl+B sort-hvid
+Er der en markering, bliver den justeringslagets maske · dobbeltklik på ikonet retter justeringen
+Lag > Lagmaske eller maskeknappen nederst i lagpanelet tilføjer en maske
+Klik på maskens miniature for at male på masken (sort skjuler, hvid viser) · klik på billedet for pixels
+Shift-klik på masken slår den fra og til · Ctrl-klik indlæser den som markering · Ctrl+I inverterer
+Gem som .lagkage for at kunne rette justeringer og masker senere
 
 Udklipsholder
 Ctrl+C / Ctrl+X / Ctrl+V · Ctrl+Shift+C kopiér flettet · Ctrl+Shift+V sæt ind på stedet
