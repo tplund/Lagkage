@@ -13,6 +13,14 @@ PyInstaller virker ikke med Python 3.10.0, så der bygges med venv'en på Python
 .venv\Scripts\python.exe -m PyInstaller --noconfirm --windowed --name Lagkage --icon lagkage/lagkage.ico --add-data "lagkage/lagkage.ico;lagkage" --exclude-module tkinter --exclude-module matplotlib run.py
 ```
 
+## Udgiv en ny version (selvopdatering)
+
+```
+.venv\Scripts\python.exe release.py 1.2 "Hvad er nyt"
+```
+
+Scriptet sætter versionsnummeret, bygger exe og installer, committer, tagger og lægger installeren ud som en GitHub-udgivelse. Installerede kopier tjekker den seneste udgivelse ved opstart og viser en linje med "Opdatér nu". Når man klikker på den, henter programmet installeren, lukker, installerer stille og starter igen. Udviklingsbygget i `dist\` opdaterer ikke sig selv.
+
 ## Installer (til at dele programmet)
 
 Byg først exe'en (se ovenfor), og byg derefter installeren med Inno Setup:
